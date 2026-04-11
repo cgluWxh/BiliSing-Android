@@ -165,11 +165,46 @@ class PlayController(
             onPlaylistUpdated = { playList ->
                 updateState { copy(nextSong = playList.firstOrNull()) }
             },
+            onPlaybackControl = { action ->
+                handlePlaybackControl(action)
+            },
             onError = { error ->
                 updateState { copy(errorMessage = error) }
             }
         )
         socketManager?.connect()
+    }
+
+    private fun handlePlaybackControl(action: String) {
+        val device = _uiState.value.selectedDevice ?: return
+        scope.launch {
+            try {
+                when (action) {
+                    "play_from_start" -> {
+                        dlnaManager.seek(device, 0)
+                        dlnaManager.play(device)
+                    }
+                    "play_pause" -> {
+                        val state = dlnaManager.getTransportState(device)
+                        if (state == "PLAYING" || state == "TRANSITIONING") {
+                            dlnaManager.pause(device)
+                        } else {
+                            dlnaManager.play(device)
+                        }
+                    }
+                    "volume_up" -> {
+                        val v = dlnaManager.getVolume(device)
+                        dlnaManager.setVolume(device, minOf(100, v + 10))
+                    }
+                    "volume_down" -> {
+                        val v = dlnaManager.getVolume(device)
+                        dlnaManager.setVolume(device, maxOf(0, v - 10))
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed playback control: $action", e)
+            }
+        }
     }
 
     private fun playSong(song: Song) {

@@ -15,6 +15,7 @@ class RoomSocketManager(
     private val onRoomJoined: (Song?, List<Song>) -> Unit,
     private val onNowPlaying: (Song?) -> Unit,
     private val onPlaylistUpdated: (List<Song>) -> Unit,
+    private val onPlaybackControl: (String) -> Unit,
     private val onError: (String) -> Unit
 ) {
     private var socket: Socket? = null
@@ -79,6 +80,16 @@ class RoomSocketManager(
                         onPlaylistUpdated(playList)
                     } catch (e: Exception) {
                         Log.e(TAG, "Error parsing playlist_updated", e)
+                    }
+                }
+
+                on("playback_control") { args ->
+                    try {
+                        val data = args[0] as JSONObject
+                        val action = data.optString("action")
+                        onPlaybackControl(action)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error parsing playback_control", e)
                     }
                 }
 

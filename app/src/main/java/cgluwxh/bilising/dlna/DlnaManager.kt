@@ -314,6 +314,7 @@ class DlnaManager(private val context: Context) {
             var friendlyName = ""
             var udn = ""
             var avTransportControlUrl = ""
+            var renderingControlUrl = ""
             var currentServiceType = ""
             var currentControlUrl = ""
             var inService = false
@@ -331,6 +332,8 @@ class DlnaManager(private val context: Context) {
                     XmlPullParser.END_TAG -> if (parser.name?.lowercase() == "service" && inService) {
                         if (currentServiceType.contains("AVTransport") && currentControlUrl.isNotEmpty()) {
                             avTransportControlUrl = resolveUrl(location, currentControlUrl)
+                        } else if (currentServiceType.contains("RenderingControl") && currentControlUrl.isNotEmpty()) {
+                            renderingControlUrl = resolveUrl(location, currentControlUrl)
                         }
                         inService = false
                     }
@@ -344,6 +347,7 @@ class DlnaManager(private val context: Context) {
                 name = friendlyName.ifEmpty { ipAddress },
                 ipAddress = ipAddress,
                 controlUrl = avTransportControlUrl,
+                renderingControlUrl = renderingControlUrl,
                 udn = udn
             )
         } catch (e: Exception) {
@@ -444,6 +448,43 @@ class DlnaManager(private val context: Context) {
         )
     }
 
+    suspend fun getVolume(device: DlnaDevice): Int = withContext(Dispatchers.IO) {
+        if (device.renderingControlUrl.isEmpty()) {
+            Log.w(TAG, "No RenderingControl URL for device ${device.name}")
+            return@withContext 0
+        }
+        val soapBody = """<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:GetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">
+      <InstanceID>0</InstanceID>
+      <Channel>Master</Channel>
+    </u:GetVolume>
+  </s:Body>
+</s:Envelope>"""
+        val response = sendSoapActionBody(device.renderingControlUrl, "urn:schemas-upnp-org:service:RenderingControl:1#GetVolume", soapBody)
+        extractXmlValue(response, "CurrentVolume")?.toIntOrNull() ?: 0
+    }
+
+    suspend fun setVolume(device: DlnaDevice, volume: Int) = withContext(Dispatchers.IO) {
+        if (device.renderingControlUrl.isEmpty()) {
+            Log.w(TAG, "No RenderingControl URL for device ${device.name}")
+            return@withContext
+        }
+        val safeVolume = volume.coerceIn(0, 100)
+        val soapBody = """<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:SetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">
+      <InstanceID>0</InstanceID>
+      <Channel>Master</Channel>
+      <DesiredVolume>$safeVolume</DesiredVolume>
+    </u:SetVolume>
+  </s:Body>
+</s:Envelope>"""
+        sendSoapActionBody(device.renderingControlUrl, "urn:schemas-upnp-org:service:RenderingControl:1#SetVolume", soapBody)
+    }
+
     suspend fun seek(device: DlnaDevice, positionMs: Long) = withContext(Dispatchers.IO) {
         val target = formatTimeHms(positionMs)
         val soapBody = """<?xml version="1.0" encoding="utf-8"?>
@@ -477,9 +518,13 @@ class DlnaManager(private val context: Context) {
     }
 
     private fun sendSoapAction(device: DlnaDevice, action: String, body: String): String {
+        return sendSoapActionBody(device.controlUrl, action, body)
+    }
+
+    private fun sendSoapActionBody(url: String, action: String, body: String): String {
         val requestBody = body.toRequestBody("text/xml; charset=utf-8".toMediaType())
         val request = Request.Builder()
-            .url(device.controlUrl)
+            .url(url)
             .post(requestBody)
             .addHeader("SOAPACTION", "\"$action\"")
             .addHeader("Content-Type", "text/xml; charset=utf-8")
